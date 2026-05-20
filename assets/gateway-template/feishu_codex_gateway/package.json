@@ -1,0 +1,14 @@
+{
+  "name": "feishu-codex-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Feishu gateway for routing bot messages into a bound local Codex thread.",
+  "scripts": {
+    "test": "node src/index.js --test",
+    "listen": "node src/index.js --listen"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.7.2"
+  }
+}

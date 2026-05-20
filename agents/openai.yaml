@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feishu Codex Gateway"
+  short_description: "Connect Feishu/Lark chats to a local Codex gateway."
+  default_prompt: "Use the Feishu-Codex Gateway skill to inspect, run, troubleshoot, or package the local Feishu to Codex bridge."

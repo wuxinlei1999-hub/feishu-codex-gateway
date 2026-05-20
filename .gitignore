@@ -1,0 +1,5 @@
+node_modules/
+.env
+.feishu_codex_gateway/
+*.log
+*.bak-feishu-*
