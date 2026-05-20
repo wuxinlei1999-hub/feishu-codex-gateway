@@ -36,10 +36,12 @@ export function sendFeishuText(chatId, text) {
 
 export function sendFeishuReply(chatId, text) {
   const mode = String(process.env.FEISHU_CODEX_RENDER_MODE || "auto").toLowerCase();
-  if (mode === "raw" || mode === "text") return sendFeishuPlainText(chatId, text);
-  if (mode === "post" || mode === "markdown") return sendFeishuText(chatId, text);
+  const sections = splitReplySections(text);
+  if (sections.length > 1) return sendFeishuSectionedReply(chatId, sections, mode);
+  if (mode === "raw" || mode === "text") return hasLineBreak(text) ? sendFeishuReplyCard(chatId, text) : sendFeishuPlainText(chatId, text);
+  if (mode === "post" || mode === "markdown") return hasLineBreak(text) ? sendFeishuReplyCard(chatId, text) : sendFeishuText(chatId, text);
   if (mode === "card") return sendFeishuReplyCard(chatId, text);
-  if (mode === "auto" && !shouldUseCard(text)) return sendFeishuText(chatId, text);
+  if (mode === "auto" && !shouldUseCard(text) && !hasLineBreak(text)) return sendFeishuText(chatId, text);
   return sendFeishuReplyCard(chatId, text);
 }
 
@@ -67,10 +69,12 @@ export function sendFeishuPlainText(chatId, text) {
 }
 
 export function sendFeishuReplyCard(chatId, text) {
-  const chunks = splitText(prepareFeishuMarkdown(text, 2), 5500);
+  const sections = splitReplySections(text, 5200);
+  if (sections.length > 1) return sendFeishuSectionedReply(chatId, sections, "card");
+  const chunks = splitText(prepareFeishuMarkdown(text, 2), 5200);
   let ok = true;
-  for (const chunk of chunks) {
-    ok = sendFeishuInteractiveCard(chatId, buildReplyCard(chunk)) && ok;
+  for (const [index, chunk] of chunks.entries()) {
+    ok = sendSectionCardWithFallback(chatId, chunk, index, chunks.length) && ok;
   }
   return ok;
 }
@@ -135,8 +139,26 @@ export function sendFeishuInteractiveCard(chatId, card) {
   return true;
 }
 
-function buildReplyCard(markdownText) {
-  const summaryText = toCardSummaryText(markdownText);
+function sendFeishuSectionedReply(chatId, sections, mode) {
+  logLine(`send sectioned reply chat_id=${chatId} sections=${sections.length} mode=${mode}`);
+  let ok = true;
+  for (const [index, section] of sections.entries()) {
+    ok = sendSectionCardWithFallback(chatId, prepareFeishuMarkdown(section, 2), index, sections.length) && ok;
+  }
+  return ok;
+}
+
+function sendSectionCardWithFallback(chatId, markdownText, index, total) {
+  const title = sectionCardTitle(markdownText, index, total);
+  if (sendFeishuInteractiveCard(chatId, buildReplyCard(markdownText, title))) return true;
+  if (findMarkdownTablesOutsideCodeBlocks(markdownText).length === 0) return false;
+  const fallbackText = prepareFeishuMarkdown(convertMarkdownTablesToLists(markdownText), 2);
+  logLine(`retry section card without markdown tables section=${index + 1}/${total}`);
+  return sendFeishuInteractiveCard(chatId, buildReplyCard(fallbackText, `${title} list`));
+}
+
+function buildReplyCard(markdownText, title = "") {
+  const summaryText = title || toCardSummaryText(markdownText);
   return {
     schema: "2.0",
     config: {
@@ -152,6 +174,13 @@ function buildReplyCard(markdownText) {
       ]
     }
   };
+}
+
+function sectionCardTitle(markdownText, index, total) {
+  const heading = /^(?:#{1,6})\s+(.+)$/m.exec(String(markdownText || ""));
+  const title = heading?.[1] || toCardSummaryText(markdownText) || "Reply";
+  const cleanTitle = title.replace(/[*_`#|[\]()~:-]/g, "").replace(/\s+/g, " ").trim();
+  return `${index + 1}/${total} ${cleanTitle}`.slice(0, 120);
 }
 
 function toCardSummaryText(markdownText) {
@@ -246,6 +275,78 @@ function splitText(text, limit = 1800) {
   return chunks;
 }
 
+function splitReplySections(text, limit = 2200) {
+  const source = String(text || "").trim();
+  if (!source) return [""];
+  const headingSections = splitByMarkdownHeadings(source);
+  const baseSections = headingSections.length > 1 ? headingSections : [source];
+  const sections = [];
+  for (const section of baseSections) {
+    if (section.length <= limit) {
+      sections.push(section);
+      continue;
+    }
+    sections.push(...splitByParagraphs(section, limit));
+  }
+  return sections.filter((section) => section.trim());
+}
+
+function splitByMarkdownHeadings(text) {
+  const parts = [];
+  const headingRegex = /^(#{1,3})\s+(.+)$/gm;
+  let match;
+  let lastIndex = 0;
+  while ((match = headingRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const previous = text.slice(lastIndex, match.index).trim();
+      if (previous) parts.push(previous);
+    }
+    const nextMatchIndex = findNextHeadingIndex(text, headingRegex.lastIndex);
+    const section = text.slice(match.index, nextMatchIndex === -1 ? text.length : nextMatchIndex).trim();
+    if (section) parts.push(section);
+    lastIndex = nextMatchIndex === -1 ? text.length : nextMatchIndex;
+    headingRegex.lastIndex = lastIndex;
+  }
+  if (lastIndex < text.length) {
+    const tail = text.slice(lastIndex).trim();
+    if (tail) parts.push(tail);
+  }
+  return parts;
+}
+
+function findNextHeadingIndex(text, startIndex) {
+  const next = /^(#{1,3})\s+(.+)$/gm;
+  next.lastIndex = startIndex;
+  const match = next.exec(text);
+  return match ? match.index : -1;
+}
+
+function splitByParagraphs(text, limit) {
+  const paragraphs = String(text || "").split(/\n{2,}/);
+  const chunks = [];
+  let current = "";
+  for (const paragraph of paragraphs) {
+    const candidate = current ? `${current}\n\n${paragraph}` : paragraph;
+    if (candidate.length <= limit) {
+      current = candidate;
+      continue;
+    }
+    if (current) chunks.push(current);
+    if (paragraph.length <= limit) {
+      current = paragraph;
+    } else {
+      chunks.push(...splitText(paragraph, limit));
+      current = "";
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function hasLineBreak(text) {
+  return /\r?\n/.test(String(text || ""));
+}
+
 function sanitizeFeishuMarkdown(text) {
   return String(text || "").trim();
 }
@@ -316,4 +417,18 @@ function findMarkdownTablesOutsideCodeBlocks(text) {
   const value = String(text || "");
   const withoutCodeBlocks = value.replace(/(^|\n)(`{3,})([^\n]*)\n[\s\S]*?\n\2(?=\n|$)/g, "\n");
   return withoutCodeBlocks.match(/\|.+\|[\r\n]+\|[-:| ]+\|/g) || [];
+}
+
+function convertMarkdownTablesToLists(text) {
+  return String(text || "").replace(/((?:^\|.*\|\s*$\n?)+)/gm, (table) => {
+    const rows = table.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (rows.length < 2 || !/^\|[-:| ]+\|$/.test(rows[1])) return table;
+    const headers = rows[0].split("|").slice(1, -1).map((cell) => cell.trim());
+    const bodyRows = rows.slice(2);
+    return bodyRows.map((row) => {
+      const cells = row.split("|").slice(1, -1).map((cell) => cell.trim());
+      const pairs = headers.map((header, index) => `${header}: ${cells[index] || ""}`).join("; ");
+      return `- ${pairs}`;
+    }).join("\n");
+  });
 }

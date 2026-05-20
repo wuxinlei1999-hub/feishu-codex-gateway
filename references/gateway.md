@@ -267,11 +267,15 @@ New Feishu-bound Codex sessions get Feishu reply-format instructions through Cod
 
 Current rendering behavior:
 
-- Plain Markdown for normal replies.
-- CardKit markdown cards for code blocks or Markdown tables.
+- One-line normal replies may use plain Markdown.
+- Multi-line, long, or multi-section replies are split by Markdown chapters or paragraphs and sent section by section as interactive markdown cards, regardless of whether the original Codex output looked like a card, Markdown, plain text, or another reply shape.
+- Code blocks and Markdown tables use interactive markdown cards.
+- If Feishu rejects a card because a Markdown table exceeds card limits, retry that section with the table converted to list rows.
 - Full session `response_item` final answer is preferred over shorter app-server event text.
 - Angle brackets are escaped before sending Markdown so XML-like tags are visible as text.
 - Codex turns intentionally have no hard reply timeout, so long tasks can finish and push final answers back to Feishu.
+
+Avoid direct multi-line `lark-cli im +messages-send --markdown` or `--text` sends for final answers. In testing, those paths can store only the first line/body title, while interactive cards preserve the full content.
 
 Do not add a "long task progress card" by default. It was tried and removed to keep replies simpler and avoid extra Feishu messages.
 

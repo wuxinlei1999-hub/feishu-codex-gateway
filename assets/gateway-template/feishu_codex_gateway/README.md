@@ -98,7 +98,7 @@ New Codex sessions receive Feishu reply-format instructions through their base i
 
 Codex turns intentionally have no hard reply timeout, so long-running tasks can finish and still be pushed back to Feishu. Low-level app-server startup and JSON-RPC requests still use short technical guardrails so broken connections fail visibly.
 
-Feishu replies should preserve complete Codex output. The gateway prefers the full session `response_item` final answer over the shorter app-server event text, because XML-like markers such as `oai-mem-citation` can be stripped from event text. Replies render as Markdown by default; code blocks or Markdown tables are sent as CardKit markdown cards. Before sending Markdown to Feishu, the gateway escapes angle brackets so tags are visible as plain text instead of being interpreted.
+Feishu replies should preserve complete Codex output. The gateway prefers the full session `response_item` final answer over the shorter app-server event text, because XML-like markers such as `oai-mem-citation` can be stripped from event text. Long or multi-section replies are split by Markdown chapters or paragraphs before sending, regardless of whether the original output looked like a card, Markdown, plain text, or another reply shape. Multi-line replies are sent as interactive markdown cards because direct `--markdown` and `--text` CLI sends can drop body content after the first line. If a card fails because a Markdown table exceeds Feishu card limits, the gateway retries that section with the table converted to list rows. Before sending Markdown to Feishu, the gateway escapes angle brackets so tags are visible as plain text instead of being interpreted.
 
 ## Network Requirement
 

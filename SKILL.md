@@ -56,6 +56,7 @@ powershell -ExecutionPolicy Bypass -File <skill>\scripts\install-startup.ps1
 - Do not use proxy mode unless the user explicitly asks to debug shared Desktop/app-server internals.
 - Do not print Feishu app secrets, tokens, cookies, device codes, or verification URLs.
 - If replies are slow and logs show `Reconnecting... 1/5` through `5/5`, check VPN and TUN mode before changing gateway code.
+- For long or multi-line final replies, keep the gateway's sectioned interactive-card sender; direct multi-line `--markdown` or `--text` CLI sends can lose body content.
 - The startup task is a current-user Windows scheduled task named `FeishuCodexGateway`.
 
 ## Local Defaults
