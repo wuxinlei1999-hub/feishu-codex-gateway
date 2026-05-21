@@ -16,7 +16,7 @@ export function buildProjectSessionCards({ threads, currentChat, savedRoots }) {
   const { projectGroups, normalThreads } = groupThreads(visibleThreads, savedRoots);
   const currentRoot = matchingProjectRoot(currentChat?.cwd, savedRoots);
   const currentProject = currentRoot ? projectLabel(path.basename(currentRoot)) : "普通会话";
-  const currentThreadName = currentChat?.threadName || "Feishu Session";
+  const currentThreadName = currentChat?.threadName || "飞书会话";
   const orderedProjects = [...projectGroups.keys()].sort((a, b) => {
     if (a === currentProject) return -1;
     if (b === currentProject) return 1;

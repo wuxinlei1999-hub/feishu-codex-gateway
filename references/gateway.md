@@ -1,4 +1,4 @@
-# Feishu-Codex Gateway Reference
+﻿# Feishu-Codex Gateway Reference
 
 ## Architecture
 
@@ -323,3 +323,4 @@ Do not commit local secrets or runtime state:
 ```
 
 A reusable open-source version should expose workspace root, project name, thread name, model, and reasoning effort as config while keeping the bridge logic small.
+

@@ -1,4 +1,4 @@
----
+﻿---
 name: feishu-codex-gateway
 description: Operate, troubleshoot, and package the local Feishu/Lark to Codex gateway that lets a Feishu bot chat with a long-lived Codex app-server thread. Use when the user mentions Feishu/Lark connecting to Codex, the Feishu-Codex gateway, Xiaoshu bot chat, gateway startup/autostart, Feishu message routing, session/model switching from Feishu, gateway logs, lark-cli event consume, or repeated Codex stream reconnects such as Reconnecting 1/5 through 5/5.
 ---
@@ -93,3 +93,4 @@ Reasoning: high
 - `scripts/stop-gateway.ps1`: stop the gateway and child processes.
 - `scripts/install-startup.ps1`: register Windows logon autostart.
 - `scripts/uninstall-startup.ps1`: remove Windows logon autostart.
+

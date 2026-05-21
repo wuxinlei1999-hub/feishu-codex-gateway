@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+﻿import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -14,8 +14,11 @@ const DEFAULT_THREAD_NAME = "Feishu Session";
 
 export const FEISHU_REPLY_FORMAT_INSTRUCTIONS = [
   "Feishu reply content requirements:",
-  "- Reply naturally in Chinese, optimized for mobile reading: concise, clear, and well sectioned.",
+  "- Reply naturally in Chinese, optimized for mobile reading: concise, clear, and not over-sectioned.",
   "- Answer short questions briefly; do not expand just to look complete.",
+  "- Default to one message with lightweight headings only when useful. Do not split or over-structure short replies.",
+  "- Use tables only for short status, statistics, compact key-value data, or brief A/B comparisons. Avoid tables with more than 3 columns, more than 8 rows, or long sentence-like cells.",
+  "- Do not put long-form content, explanations, reports, memories, personas, issue analysis, or optimization suggestions inside tables; use grouped lists or paragraphs instead.",
   "- If the user asks for an exact string such as OK or PROJECT_OK, or asks for one sentence only, obey that exact shape.",
   "- For code, logs, or command output: explain first in Chinese, then put code/log/output in standalone fenced code blocks.",
   "- Before high-risk actions such as writing files, installing dependencies, deleting, committing, pushing, or deploying, explain the action and wait for confirmation.",

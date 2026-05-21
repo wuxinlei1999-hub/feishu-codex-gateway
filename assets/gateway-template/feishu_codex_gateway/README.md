@@ -1,4 +1,4 @@
-# Feishu Codex Gateway
+﻿# Feishu Codex Gateway
 
 A thin TeleCodex-style bridge for Feishu/Lark and Codex.
 

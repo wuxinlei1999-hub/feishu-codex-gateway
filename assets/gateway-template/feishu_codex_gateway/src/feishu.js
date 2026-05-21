@@ -275,7 +275,7 @@ function splitText(text, limit = 1800) {
   return chunks;
 }
 
-function splitReplySections(text, limit = 2200) {
+function splitReplySections(text, limit = 5200) {
   const source = String(text || "").trim();
   if (!source) return [""];
   const headingSections = splitByMarkdownHeadings(source);
@@ -286,39 +286,55 @@ function splitReplySections(text, limit = 2200) {
       sections.push(section);
       continue;
     }
-    sections.push(...splitByParagraphs(section, limit));
+    sections.push(...splitSectionByParagraphs(section, limit));
   }
   return sections.filter((section) => section.trim());
 }
 
 function splitByMarkdownHeadings(text) {
-  const parts = [];
-  const headingRegex = /^(#{1,3})\s+(.+)$/gm;
+  const level = chooseSectionHeadingLevel(text);
+  if (!level) return [];
+  const headingRegex = new RegExp(`^#{${level}}\\s+.+$`, "gm");
+  const matches = [];
   let match;
-  let lastIndex = 0;
   while ((match = headingRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      const previous = text.slice(lastIndex, match.index).trim();
-      if (previous) parts.push(previous);
-    }
-    const nextMatchIndex = findNextHeadingIndex(text, headingRegex.lastIndex);
-    const section = text.slice(match.index, nextMatchIndex === -1 ? text.length : nextMatchIndex).trim();
-    if (section) parts.push(section);
-    lastIndex = nextMatchIndex === -1 ? text.length : nextMatchIndex;
-    headingRegex.lastIndex = lastIndex;
+    matches.push({ index: match.index });
   }
-  if (lastIndex < text.length) {
-    const tail = text.slice(lastIndex).trim();
-    if (tail) parts.push(tail);
-  }
+  if (matches.length < 2) return [];
+
+  const prefix = text.slice(0, matches[0].index).trim();
+  const parts = matches.map((current, index) => {
+    const next = matches[index + 1];
+    return text.slice(current.index, next ? next.index : text.length).trim();
+  }).filter(Boolean);
+  if (prefix && parts[0]) parts[0] = `${prefix}\n\n${parts[0]}`;
   return parts;
 }
 
-function findNextHeadingIndex(text, startIndex) {
-  const next = /^(#{1,3})\s+(.+)$/gm;
-  next.lastIndex = startIndex;
-  const match = next.exec(text);
-  return match ? match.index : -1;
+function chooseSectionHeadingLevel(text) {
+  const h2Count = countHeadingLevel(text, 2);
+  if (h2Count >= 2) return 2;
+  const h1Count = countHeadingLevel(text, 1);
+  if (h1Count >= 2) return 1;
+  return null;
+}
+
+function countHeadingLevel(text, level) {
+  const regex = new RegExp(`^#{${level}}\\s+.+$`, "gm");
+  let count = 0;
+  while (regex.exec(text) !== null) count += 1;
+  return count;
+}
+
+function splitSectionByParagraphs(text, limit) {
+  const chunks = splitByParagraphs(text, limit);
+  if (chunks.length <= 1) return chunks;
+  const heading = /^(#{1,2}\s+.+)$/m.exec(String(text || ""))?.[1];
+  if (!heading) return chunks;
+  return chunks.map((chunk, index) => {
+    if (index === 0 || chunk.startsWith(heading)) return chunk;
+    return `${heading}（续 ${index + 1}/${chunks.length}）\n\n${chunk}`;
+  });
 }
 
 function splitByParagraphs(text, limit) {
