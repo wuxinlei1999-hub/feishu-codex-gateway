@@ -36,6 +36,7 @@ export function createJob(state, { chatId, threadId, text, cwd, model, reasoning
 export function markJobStarting(state, jobId) {
   const job = getJob(state, jobId);
   if (!job) return null;
+  if (TERMINAL_JOB_STATUSES.has(job.status)) return job;
   job.status = "starting";
   job.lastEvent = "正在启动 Codex 任务";
   job.startedAt ||= new Date().toISOString();
@@ -46,6 +47,7 @@ export function markJobStarting(state, jobId) {
 export function attachTurn(state, jobId, turnId) {
   const job = getJob(state, jobId);
   if (!job) return null;
+  if (TERMINAL_JOB_STATUSES.has(job.status)) return job;
   job.turnId = turnId || job.turnId;
   job.status = "running";
   job.lastEvent = "Codex 已开始处理";
@@ -96,6 +98,7 @@ export function updateJobFromCodexEvent(state, jobId, message) {
 export function markJobCompleted(state, jobId) {
   const job = getJob(state, jobId);
   if (!job) return null;
+  if (TERMINAL_JOB_STATUSES.has(job.status)) return job;
   job.status = "completed";
   job.lastEvent = "任务已完成，正在发送最终回复";
   job.completedAt ||= new Date().toISOString();
@@ -106,6 +109,7 @@ export function markJobCompleted(state, jobId) {
 export function markJobFailed(state, jobId, error) {
   const job = getJob(state, jobId);
   if (!job) return null;
+  if (TERMINAL_JOB_STATUSES.has(job.status)) return job;
   job.status = job.status === "canceling" ? "canceled" : "failed";
   job.error = error?.message || String(error || "");
   job.lastEvent = job.status === "canceled" ? "任务已取消" : "任务失败";
@@ -117,6 +121,7 @@ export function markJobFailed(state, jobId, error) {
 export function markJobCanceling(state, jobId) {
   const job = getJob(state, jobId);
   if (!job) return null;
+  if (TERMINAL_JOB_STATUSES.has(job.status)) return job;
   job.status = "canceling";
   job.lastEvent = "正在请求 Codex 取消任务";
   touch(job);
@@ -136,9 +141,20 @@ export function markStaleRunningJobs(state) {
   return changed;
 }
 
+export function markJobInterrupted(state, jobId, reason = "\u4efb\u52a1\u72b6\u6001\u5df2\u5931\u6548\uff0c\u5df2\u81ea\u52a8\u6536\u5c3e") {
+  const job = getJob(state, jobId);
+  if (!job || TERMINAL_JOB_STATUSES.has(job.status)) return null;
+  job.status = "interrupted";
+  job.lastEvent = reason;
+  job.completedAt ||= new Date().toISOString();
+  touch(job);
+  return job;
+}
+
 export function markJobSteered(state, jobId, text) {
   const job = getJob(state, jobId);
   if (!job) return null;
+  if (TERMINAL_JOB_STATUSES.has(job.status)) return job;
   job.lastEvent = `已追加补充：${truncate(firstLine(text, 120), 120)}`;
   touch(job);
   return job;

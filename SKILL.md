@@ -1,4 +1,4 @@
-﻿---
+---
 name: feishu-codex-gateway
 description: Operate, troubleshoot, and package the local Feishu/Lark to Codex gateway that lets a Feishu bot chat with a long-lived Codex app-server thread. Use when the user mentions Feishu/Lark connecting to Codex, the Feishu-Codex gateway, Feishu bot chat, gateway startup/autostart, Feishu message routing, session/model switching from Feishu, gateway logs, lark-cli event consume, or repeated Codex stream reconnects such as Reconnecting 1/5 through 5/5.
 ---
@@ -61,6 +61,7 @@ powershell -ExecutionPolicy Bypass -File <skill>\scripts\install-startup.ps1
 - Do not print Feishu app secrets, tokens, cookies, device codes, or verification URLs.
 - If replies are slow and logs show `Reconnecting... 1/5` through `5/5`, check VPN and TUN mode before changing gateway code.
 - For long or multi-line final replies, keep the gateway's sectioned interactive-card sender; direct multi-line `--markdown` or `--text` CLI sends can lose body content.
+- If Codex reports `no active turn` during steer/cancel, mark the stale active job `interrupted`, unblock the queue, and keep completion/failure state writes serialized with Feishu message handling.
 - The startup task is a current-user Windows scheduled task named `FeishuCodexGateway`.
 
 ## Local Defaults

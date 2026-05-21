@@ -287,6 +287,8 @@ When a Codex task is already running, a router turn classifies the next Feishu m
 
 Queued jobs should acknowledge with a short text message and should not show a task card until they actually start.
 
+If Codex reports `no active turn` while the gateway tries to steer or cancel an active job, treat that active job as stale: mark it `interrupted`, publish the status update, and immediately unblock the next queued job. Completion/failure finalizers should run through the same serialized bridge queue as Feishu message handling so stale state snapshots cannot overwrite newer terminal job states.
+
 ## Reply Rendering
 
 New Feishu-bound Codex sessions get Feishu reply-format instructions through Codex app-server base instructions. The sender layer should preserve complete Codex output.

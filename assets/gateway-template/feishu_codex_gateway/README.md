@@ -107,6 +107,8 @@ When a Codex task is already running, the gateway classifies the next Feishu mes
 
 Queued jobs acknowledge by text and get a task card only when they actually start.
 
+If Codex reports `no active turn` while steering or canceling, the gateway treats the active job as stale, marks it `interrupted`, and immediately unblocks the next queued job. Final completion/failure writes are serialized with Feishu message handling so older in-memory snapshots cannot overwrite a newer terminal job state.
+
 New Codex sessions receive Feishu reply-format instructions through their base instructions. Existing sessions are not auto-patched during normal chat.
 
 Codex turns intentionally have no hard reply timeout, so long-running tasks can finish and still be pushed back to Feishu. Low-level app-server startup and JSON-RPC requests still use short technical guardrails so broken connections fail visibly.

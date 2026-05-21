@@ -20,6 +20,7 @@ import {
   markJobCanceling,
   markJobCompleted,
   markJobFailed,
+  markJobInterrupted,
   markJobStarting,
   markJobSteered,
   markStaleRunningJobs,
@@ -66,6 +67,15 @@ export class ThinBridge {
       .catch((error) => {
         logLine(`bridge queue error: ${error.stack || error.message}`);
         this.sendText(event.chatId, `\u5904\u7406\u5931\u8d25\uff1a${error.message}`);
+      });
+    return this.queue;
+  }
+
+  enqueueBackground(label, work) {
+    this.queue = this.queue
+      .then(work)
+      .catch((error) => {
+        logLine(`bridge background queue error ${label}: ${error.stack || error.message}`);
       });
     return this.queue;
   }
@@ -231,14 +241,22 @@ export class ThinBridge {
       });
     }
 
-    const activeJob = findActiveJobForThread(state, chat.threadId);
+    let latestState = loadState();
+    let latestChat = getBridgeChat(latestState, getBindingKey(chatId), chatId);
+    normalizeChat(latestChat);
+    saveState(latestState);
+
+    let activeJob = findActiveJobForThread(latestState, latestChat.threadId);
     if (activeJob) {
-      const disposition = await classifyTaskDisposition({ text, activeJob, chat, state }).catch((error) => {
+      const disposition = await classifyTaskDisposition({ text, activeJob, chat: latestChat, state: latestState }).catch((error) => {
         logLine(`task disposition classify failed: ${error.message}`);
         return "enqueue";
       });
-      saveState(state);
-      if (disposition === "steer" && activeJob.turnId) {
+      latestState = loadState();
+      latestChat = getBridgeChat(latestState, getBindingKey(chatId), chatId);
+      normalizeChat(latestChat);
+      activeJob = latestState.jobs?.[activeJob.id] || findActiveJobForThread(latestState, latestChat.threadId);
+      if (activeJob && disposition === "steer" && activeJob.turnId) {
         try {
           await codexAppServer.steerTurn({ threadId: activeJob.threadId, turnId: activeJob.turnId, text });
           const latestState = loadState();
@@ -249,22 +267,39 @@ export class ThinBridge {
           return;
         } catch (error) {
           logLine(`turn steer failed; enqueue instead job_id=${activeJob.id}: ${error.message}`);
+          if (isNoActiveTurnError(error)) {
+            const staleState = loadState();
+            const staleJob = markJobInterrupted(
+              staleState,
+              activeJob.id,
+              "当前 Codex turn 已不活跃，网关已自动收尾"
+            );
+            saveState(staleState);
+            await this.publishJob(staleJob);
+          }
         }
       }
     }
 
-    const job = createJob(state, {
+    latestState = loadState();
+    latestChat = getBridgeChat(latestState, getBindingKey(chatId), chatId);
+    normalizeChat(latestChat);
+    const job = createJob(latestState, {
       chatId,
-      threadId: chat.threadId,
+      threadId: latestChat.threadId,
       text,
-      cwd: chat.cwd,
-      model: chat.model,
-      reasoning: chat.reasoning
+      cwd: latestChat.cwd,
+      model: latestChat.model,
+      reasoning: latestChat.reasoning
     });
-    saveState(state);
-    if (activeJob || findActiveJobForThread(state, chat.threadId)) {
-      logLine(`bridge queued job chat_id=${chatId} thread_id=${chat.threadId} job_id=${job.id}`);
+    saveState(latestState);
+
+    const currentActiveJob = findActiveJobForThread(latestState, latestChat.threadId);
+    const nextQueuedJob = findNextQueuedJobForThread(latestState, latestChat.threadId);
+    if (currentActiveJob || nextQueuedJob?.id !== job.id) {
+      logLine(`bridge queued job chat_id=${chatId} thread_id=${latestChat.threadId} job_id=${job.id}`);
       this.sendText(chatId, `已排队：${job.title}\n前一个任务完成后开始。`);
+      if (!currentActiveJob) await this.processNextQueuedJob(latestChat.threadId);
       return;
     }
 
@@ -279,37 +314,56 @@ export class ThinBridge {
     saveState(state);
     await this.publishJob(job);
 
-    const { turnId, completion } = await codexAppServer.startTurnStream({
-      threadId: job.threadId,
-      text: job.text,
-      cwd: job.cwd,
-      model: job.model,
-      reasoning: job.reasoning,
-      onEvent: (message) => this.handleJobEvent(job.id, message)
-    });
+    let turnId;
+    let completion;
+    try {
+      const started = await codexAppServer.startTurnStream({
+        threadId: job.threadId,
+        text: job.text,
+        cwd: job.cwd,
+        model: job.model,
+        reasoning: job.reasoning,
+        onEvent: (message) => this.handleJobEvent(job.id, message)
+      });
+      turnId = started.turnId;
+      completion = started.completion;
+    } catch (error) {
+      logLine(`bridge codex turn start failed chat_id=${job.chatId} thread_id=${job.threadId} error=${error.stack || error.message}`);
+      const failedState = loadState();
+      markJobFailed(failedState, job.id, error);
+      saveState(failedState);
+      await this.publishJob(failedState.jobs[job.id]);
+      this.sendText(job.chatId, `任务启动失败：${error.message}`);
+      await this.processNextQueuedJob(job.threadId);
+      return;
+    }
     const latestState = loadState();
     attachTurn(latestState, job.id, turnId);
     saveState(latestState);
     await this.publishJob(latestState.jobs[job.id]);
 
     completion.then((reply) => {
-      logLine(`bridge codex turn completed chat_id=${job.chatId} thread_id=${job.threadId} elapsed_ms=${Date.now() - startedAt}`);
-      const latestState = loadState();
-      const latestChat = getBridgeChat(latestState, getBindingKey(job.chatId), job.chatId);
-      latestChat.updatedAt = now();
-      markJobCompleted(latestState, job.id);
-      saveState(latestState);
-      this.publishJob(latestState.jobs[job.id]);
-      this.sendReply(job.chatId, reply);
-      this.processNextQueuedJob(job.threadId);
+      this.enqueueBackground(`complete job ${job.id}`, async () => {
+        logLine(`bridge codex turn completed chat_id=${job.chatId} thread_id=${job.threadId} elapsed_ms=${Date.now() - startedAt}`);
+        const latestState = loadState();
+        const latestChat = getBridgeChat(latestState, getBindingKey(job.chatId), job.chatId);
+        latestChat.updatedAt = now();
+        markJobCompleted(latestState, job.id);
+        saveState(latestState);
+        await this.publishJob(latestState.jobs[job.id]);
+        this.sendReply(job.chatId, reply);
+        await this.processNextQueuedJob(job.threadId);
+      });
     }).catch((error) => {
-      logLine(`bridge codex turn failed chat_id=${job.chatId} thread_id=${job.threadId} error=${error.stack || error.message}`);
-      const latestState = loadState();
-      markJobFailed(latestState, job.id, error);
-      saveState(latestState);
-      this.publishJob(latestState.jobs[job.id]);
-      this.sendText(job.chatId, `任务失败：${error.message}`);
-      this.processNextQueuedJob(job.threadId);
+      this.enqueueBackground(`fail job ${job.id}`, async () => {
+        logLine(`bridge codex turn failed chat_id=${job.chatId} thread_id=${job.threadId} error=${error.stack || error.message}`);
+        const latestState = loadState();
+        markJobFailed(latestState, job.id, error);
+        saveState(latestState);
+        await this.publishJob(latestState.jobs[job.id]);
+        this.sendText(job.chatId, `任务失败：${error.message}`);
+        await this.processNextQueuedJob(job.threadId);
+      });
     });
   }
 
@@ -415,6 +469,19 @@ export class ThinBridge {
       await codexAppServer.interruptTurn(job.turnId, job.threadId);
       this.sendText(chatId, `已发送取消请求：${job.id}`);
     } catch (error) {
+      if (isNoActiveTurnError(error)) {
+        const latestState = loadState();
+        const staleJob = markJobInterrupted(
+          latestState,
+          job.id,
+          "Codex 已没有活跃 turn，网关已自动收尾并继续队列"
+        );
+        saveState(latestState);
+        await this.publishJob(staleJob);
+        this.sendText(chatId, "当前任务已经不活跃，已自动收尾并继续队列。");
+        await this.processNextQueuedJob(job.threadId);
+        return;
+      }
       this.sendText(chatId, `取消请求失败：${error.message}`);
     }
   }
@@ -457,6 +524,10 @@ function shouldPublishJobEvent(message, job) {
 
 function isTerminalJob(job) {
   return ["completed", "failed", "canceled", "interrupted"].includes(job?.status);
+}
+
+function isNoActiveTurnError(error) {
+  return /no active turn/i.test(error?.message || String(error || ""));
 }
 
 async function loadSessions() {
