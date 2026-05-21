@@ -4,8 +4,8 @@ import iconv from "iconv-lite";
 import { logLine, truncate } from "./config.js";
 
 function larkCommand() {
-  const localExe = process.env.LARK_CLI_PATH || "";
-  if (localExe && fs.existsSync(localExe)) return localExe;
+  const configured = process.env.FEISHU_CODEX_LARK_CLI || process.env.LARK_CLI_PATH;
+  if (configured && fs.existsSync(configured)) return configured;
   return process.platform === "win32" ? "lark-cli.cmd" : "lark-cli";
 }
 
@@ -80,9 +80,13 @@ export function sendFeishuReplyCard(chatId, text) {
 }
 
 export function sendFeishuCardKitCard(chatId, card, fallbackCard = card) {
+  return sendFeishuCardKitCardDetailed(chatId, card, fallbackCard).ok;
+}
+
+export function sendFeishuCardKitCardDetailed(chatId, card, fallbackCard = card) {
   if (!chatId || chatId === "local-test") {
     console.log(JSON.stringify(card, null, 2));
-    return true;
+    return { ok: true, cardId: "local-card" };
   }
 
   const command = larkCommand();
@@ -111,13 +115,39 @@ export function sendFeishuCardKitCard(chatId, card, fallbackCard = card) {
       ["im", "+messages-send", "--as", "bot", "--chat-id", chatId, "--msg-type", "interactive", "--content", content],
       { encoding: "utf8", errors: "replace", shell: usesCmdShim(command) }
     );
-    if (sent.status === 0) return true;
+    if (sent.status === 0) return { ok: true, cardId };
     logLine(`send cardkit card_id failed code=${sent.status}: ${truncate(sent.stderr || sent.stdout, 1200)}`);
   } else {
     logLine(`create cardkit card failed code=${created.status}: ${truncate(createText, 1200)}`);
   }
 
-  return sendFeishuInteractiveCard(chatId, fallbackCard);
+  return { ok: sendFeishuInteractiveCard(chatId, fallbackCard), cardId: "" };
+}
+
+export function updateFeishuCardKitCard(cardId, card, sequence = 1) {
+  if (!cardId || cardId === "local-card") {
+    console.log(JSON.stringify(card, null, 2));
+    return true;
+  }
+  const command = larkCommand();
+  const payload = JSON.stringify({
+    card: {
+      type: "card_json",
+      data: JSON.stringify(card)
+    },
+    uuid: `update-${cardId}-${sequence}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    sequence
+  });
+  const result = spawnSync(
+    command,
+    ["api", "PUT", `/open-apis/cardkit/v1/cards/${cardId}`, "--as", "bot", "--data", "-"],
+    { input: payload, encoding: "utf8", errors: "replace", shell: usesCmdShim(command) }
+  );
+  if (result.status !== 0) {
+    logLine(`update cardkit card failed code=${result.status}: ${truncate(result.stderr || result.stdout, 1200)}`);
+    return false;
+  }
+  return true;
 }
 
 export function sendFeishuInteractiveCard(chatId, card) {

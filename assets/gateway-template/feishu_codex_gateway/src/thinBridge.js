@@ -1,22 +1,63 @@
-﻿import { FEISHU_PROJECT_ROOT, WORKSPACE_ROOT, logLine, truncate } from "./config.js";
+import { FEISHU_PROJECT_ROOT, WORKSPACE_ROOT, logLine, truncate } from "./config.js";
 import {
   codexAppServer,
   DEFAULT_MODEL,
   DEFAULT_REASONING
 } from "./codexAppServer.js";
 import { registerFeishuDesktopProject } from "./desktopState.js";
-import { classifyBridgeIntent, displayThreadName, isRouterThread, normalizeModelConfig } from "./bridgeIntent.js";
+import { classifyBridgeIntent, classifyTaskDisposition, displayThreadName, isRouterThread, normalizeModelConfig } from "./bridgeIntent.js";
 import { buildProjectSessionCards, loadDesktopWorkspaceRoots } from "./sessionCards.js";
 import { loadState, saveState } from "./state.js";
+import {
+  attachTurn,
+  buildJobCard,
+  createJob,
+  findActiveJobForChat,
+  findActiveJobForThread,
+  findNextQueuedJobForThread,
+  jobListText,
+  jobSignature,
+  markJobCanceling,
+  markJobCompleted,
+  markJobFailed,
+  markJobStarting,
+  markJobSteered,
+  markStaleRunningJobs,
+  recentJobsForChat,
+  updateJobFromCodexEvent
+} from "./jobStatus.js";
 
 const DEFAULT_THREAD_NAME = "Feishu Session";
 
 export class ThinBridge {
-  constructor({ sendText, sendCard, sendReply }) {
+  constructor({ sendText, sendCard, sendReply, sendJobCard, updateJobCard }) {
     this.sendText = sendText;
     this.sendCard = sendCard;
     this.sendReply = sendReply || sendText;
+    this.sendJobCard = sendJobCard;
+    this.updateJobCard = updateJobCard;
     this.queue = Promise.resolve();
+    this.jobCardQueues = new Map();
+  }
+
+  async recoverInterruptedJobs() {
+    const state = loadState();
+    const threadIds = new Set(
+      Object.values(state.jobs || {})
+        .filter((job) => job.status === "queued" && job.threadId)
+        .map((job) => job.threadId)
+    );
+    if (!markStaleRunningJobs(state) && threadIds.size === 0) return;
+    saveState(state);
+    for (const job of Object.values(state.jobs || {})) {
+      if (job.status === "interrupted") {
+        if (job.threadId) threadIds.add(job.threadId);
+        this.publishJob(job);
+      }
+    }
+    for (const threadId of threadIds) {
+      await this.processNextQueuedJob(threadId);
+    }
   }
 
   handleMessage(event) {
@@ -131,13 +172,47 @@ export class ThinBridge {
       return;
     }
 
+    if (intent.action === "cancel_job") {
+      await this.cancelActiveJob({ chatId, state });
+      return;
+    }
+
+    if (intent.action === "list_jobs") {
+      this.sendText(chatId, jobListText(recentJobsForChat(state, chatId)));
+      return;
+    }
+
+    if (intent.action === "archive_session" || intent.action === "unarchive_session") {
+      const threadId = intent.threadId || chat.threadId;
+      if (!threadId) {
+        this.sendText(chatId, "当前没有绑定会话，无法操作。");
+        return;
+      }
+      const action = intent.action === "archive_session" ? "归档" : "恢复";
+      try {
+        if (intent.action === "archive_session") {
+          await codexAppServer.archiveThread(threadId);
+        } else {
+          await codexAppServer.unarchiveThread(threadId);
+        }
+        this.sendText(chatId, `已${action}当前 Codex 会话：${threadId}`);
+      } catch (error) {
+        this.sendText(chatId, `${action}失败：${error.message}`);
+      }
+      return;
+    }
+
+    if (intent.action === "read_session") {
+      await this.readSession({ chatId, chat, intent });
+      return;
+    }
+
     if (intent.action === "help") {
       this.sendText(chatId, helpText(chat));
     }
   }
 
   async delegateToCodex({ chatId, chat, state, text }) {
-    const startedAt = Date.now();
     if (!chat.threadId) {
       chat.threadId = await codexAppServer.startThread({
         cwd: chat.cwd,
@@ -156,17 +231,206 @@ export class ThinBridge {
       });
     }
 
-    const reply = await codexAppServer.runTurn({
+    const activeJob = findActiveJobForThread(state, chat.threadId);
+    if (activeJob) {
+      const disposition = await classifyTaskDisposition({ text, activeJob, chat, state }).catch((error) => {
+        logLine(`task disposition classify failed: ${error.message}`);
+        return "enqueue";
+      });
+      saveState(state);
+      if (disposition === "steer" && activeJob.turnId) {
+        try {
+          await codexAppServer.steerTurn({ threadId: activeJob.threadId, turnId: activeJob.turnId, text });
+          const latestState = loadState();
+          markJobSteered(latestState, activeJob.id, text);
+          saveState(latestState);
+          await this.publishJob(latestState.jobs[activeJob.id]);
+          this.sendText(chatId, `已追加到当前任务：${activeJob.title}`);
+          return;
+        } catch (error) {
+          logLine(`turn steer failed; enqueue instead job_id=${activeJob.id}: ${error.message}`);
+        }
+      }
+    }
+
+    const job = createJob(state, {
+      chatId,
       threadId: chat.threadId,
       text,
       cwd: chat.cwd,
       model: chat.model,
       reasoning: chat.reasoning
     });
-    logLine(`bridge codex turn completed chat_id=${chatId} thread_id=${chat.threadId} elapsed_ms=${Date.now() - startedAt}`);
-    chat.updatedAt = now();
     saveState(state);
-    this.sendReply(chatId, reply);
+    if (activeJob || findActiveJobForThread(state, chat.threadId)) {
+      logLine(`bridge queued job chat_id=${chatId} thread_id=${chat.threadId} job_id=${job.id}`);
+      this.sendText(chatId, `已排队：${job.title}\n前一个任务完成后开始。`);
+      return;
+    }
+
+    await this.startQueuedJob(job.id);
+  }
+
+  async startQueuedJob(jobId) {
+    const startedAt = Date.now();
+    const state = loadState();
+    const job = markJobStarting(state, jobId);
+    if (!job) return;
+    saveState(state);
+    await this.publishJob(job);
+
+    const { turnId, completion } = await codexAppServer.startTurnStream({
+      threadId: job.threadId,
+      text: job.text,
+      cwd: job.cwd,
+      model: job.model,
+      reasoning: job.reasoning,
+      onEvent: (message) => this.handleJobEvent(job.id, message)
+    });
+    const latestState = loadState();
+    attachTurn(latestState, job.id, turnId);
+    saveState(latestState);
+    await this.publishJob(latestState.jobs[job.id]);
+
+    completion.then((reply) => {
+      logLine(`bridge codex turn completed chat_id=${job.chatId} thread_id=${job.threadId} elapsed_ms=${Date.now() - startedAt}`);
+      const latestState = loadState();
+      const latestChat = getBridgeChat(latestState, getBindingKey(job.chatId), job.chatId);
+      latestChat.updatedAt = now();
+      markJobCompleted(latestState, job.id);
+      saveState(latestState);
+      this.publishJob(latestState.jobs[job.id]);
+      this.sendReply(job.chatId, reply);
+      this.processNextQueuedJob(job.threadId);
+    }).catch((error) => {
+      logLine(`bridge codex turn failed chat_id=${job.chatId} thread_id=${job.threadId} error=${error.stack || error.message}`);
+      const latestState = loadState();
+      markJobFailed(latestState, job.id, error);
+      saveState(latestState);
+      this.publishJob(latestState.jobs[job.id]);
+      this.sendText(job.chatId, `任务失败：${error.message}`);
+      this.processNextQueuedJob(job.threadId);
+    });
+  }
+
+  async processNextQueuedJob(threadId) {
+    const state = loadState();
+    if (findActiveJobForThread(state, threadId)) return;
+    const next = findNextQueuedJobForThread(state, threadId);
+    if (!next) return;
+    await this.startQueuedJob(next.id);
+  }
+
+  async handleJobEvent(jobId, message) {
+    const state = loadState();
+    const job = updateJobFromCodexEvent(state, jobId, message);
+    if (!job) return;
+    saveState(state);
+    if (!shouldPublishJobEvent(message, job)) return;
+    await this.publishJobIfChanged(job);
+  }
+
+  async publishJobIfChanged(job) {
+    const signature = jobSignature(job);
+    if (job.lastPushedSignature === signature) return;
+    job.lastPushedSignature = signature;
+    await this.publishJob(job);
+  }
+
+  async publishJob(job) {
+    if (!job) return;
+    const previous = this.jobCardQueues.get(job.id) || Promise.resolve();
+    const next = previous
+      .catch((error) => {
+        logLine(`job card queue recovered job_id=${job.id}: ${error.message}`);
+      })
+      .then(() => this.publishJobNow(job.id))
+      .catch((error) => {
+        logLine(`job card publish failed job_id=${job.id}: ${error.stack || error.message}`);
+      });
+    this.jobCardQueues.set(job.id, next);
+    next.finally(() => {
+      if (this.jobCardQueues.get(job.id) === next) {
+        this.jobCardQueues.delete(job.id);
+      }
+    });
+    return next;
+  }
+
+  async publishJobNow(jobId) {
+    const state = loadState();
+    const job = state.jobs?.[jobId];
+    if (!job) return;
+    const card = buildJobCard(job);
+    const signature = jobSignature(job);
+    if (job.cardId && this.updateJobCard) {
+      const nextSequence = (job.cardSequence || 0) + 1;
+      job.cardSequence = nextSequence;
+      saveState(state);
+      if (this.updateJobCard(job.cardId, card, nextSequence)) {
+        const latestState = loadState();
+        if (latestState.jobs?.[job.id]) {
+          latestState.jobs[job.id].cardSequence = nextSequence;
+          latestState.jobs[job.id].lastPushedSignature = signature;
+          saveState(latestState);
+        }
+        return;
+      }
+      logLine(`job card update failed job_id=${job.id} card_id=${job.cardId}`);
+      return;
+    }
+    if (this.sendJobCard) {
+      const result = this.sendJobCard(job.chatId, card, card);
+      if (result?.ok && result.cardId) {
+        const state = loadState();
+        if (state.jobs?.[job.id]) {
+          state.jobs[job.id].cardId = result.cardId;
+          state.jobs[job.id].cardSequence = 0;
+          state.jobs[job.id].lastPushedSignature = signature;
+          saveState(state);
+        }
+        job.cardId = result.cardId;
+        job.cardSequence = 0;
+        job.lastPushedSignature = signature;
+        return;
+      }
+    }
+    this.sendText(job.chatId, `${job.title}\n状态：${job.status}\n事件：${job.lastEvent}`);
+  }
+
+  async cancelActiveJob({ chatId, state }) {
+    const job = findActiveJobForChat(state, chatId);
+    if (!job) {
+      this.sendText(chatId, "当前没有正在运行的任务。");
+      return;
+    }
+    markJobCanceling(state, job.id);
+    saveState(state);
+    await this.publishJob(job);
+    if (!job.turnId) {
+      this.sendText(chatId, "任务还在启动中，暂时没有 turnId；已标记为取消中。");
+      return;
+    }
+    try {
+      await codexAppServer.interruptTurn(job.turnId, job.threadId);
+      this.sendText(chatId, `已发送取消请求：${job.id}`);
+    } catch (error) {
+      this.sendText(chatId, `取消请求失败：${error.message}`);
+    }
+  }
+
+  async readSession({ chatId, chat, intent }) {
+    const threadId = intent.threadId || chat.threadId;
+    if (!threadId) {
+      this.sendText(chatId, "当前没有绑定会话，无法读取。");
+      return;
+    }
+    try {
+      const result = await codexAppServer.readThread(threadId);
+      this.sendText(chatId, summarizeThreadRead(result, threadId));
+    } catch (error) {
+      this.sendText(chatId, `读取会话失败：${error.message}`);
+    }
   }
 
   async sendSessions(chatId, chat, sessions) {
@@ -183,6 +447,18 @@ export class ThinBridge {
   }
 }
 
+function shouldPublishJobEvent(message, job) {
+  if (isTerminalJob(job)) return true;
+  const method = message?.method || "";
+  if (method === "turn/started" || method === "turn/failed" || method === "error") return true;
+  if (method === "item/started" || method === "item/completed") return true;
+  return false;
+}
+
+function isTerminalJob(job) {
+  return ["completed", "failed", "canceled", "interrupted"].includes(job?.status);
+}
+
 async function loadSessions() {
   const result = await codexAppServer.request("thread/list", { limit: 100 }, 30000);
   return (result?.data || []).filter((thread) => !isRouterThread(thread));
@@ -196,6 +472,24 @@ function parseShortcutCommand(text) {
   if (/^\/current\b/.test(trimmed)) return { action: "current_session" };
   if (/^\/sessions\b/.test(trimmed)) return { action: "list_sessions" };
   if (/^\/help\b/.test(trimmed)) return { action: "help" };
+  if (/^\/cancel\b/.test(trimmed) || /^(取消任务|停止任务|中断任务)$/.test(trimmed)) {
+    return { action: "cancel_job" };
+  }
+  if (/^\/jobs\b/.test(trimmed) || /^(任务列表|查看任务)$/.test(trimmed)) {
+    return { action: "list_jobs" };
+  }
+  if (/^\/archive\b/.test(trimmed) || /^(归档当前会话|归档会话)$/.test(trimmed)) {
+    const arg = trimmed.replace(/^\/archive\b/, "").trim();
+    return { action: "archive_session", threadId: isLikelyThreadId(arg) ? arg : "" };
+  }
+  if (/^\/unarchive\b/.test(trimmed) || /^(恢复当前会话|恢复会话)$/.test(trimmed)) {
+    const arg = trimmed.replace(/^\/unarchive\b/, "").trim();
+    return { action: "unarchive_session", threadId: isLikelyThreadId(arg) ? arg : "" };
+  }
+  if (/^\/read\b/.test(trimmed) || /^(读取当前会话|查看当前会话)$/.test(trimmed)) {
+    const arg = trimmed.replace(/^\/read\b/, "").trim();
+    return { action: "read_session", threadId: isLikelyThreadId(arg) ? arg : "" };
+  }
   if (/^\/switch\b/.test(trimmed)) {
     const arg = trimmed.replace(/^\/switch\b/, "").trim();
     return { action: "switch_session", targetName: arg, threadId: isLikelyThreadId(arg) ? arg : "" };
@@ -215,11 +509,13 @@ function shouldUseIntentRouter(text) {
   if (!value) return false;
   if (isLikelyThreadId(value)) return true;
   if (/^(help|\?)$/i.test(value)) return true;
-  if (/\b(session|thread|model|reasoning|switch|current|new|help)\b/i.test(value)) return true;
+  if (/\b(session|thread|model|reasoning|switch|current|new|help|cancel|stop|halt|pause|interrupt|job|jobs|archive|unarchive|read)\b/i.test(value)) return true;
   if (/(gpt[-\s]?\d|gpt\d|\b5\.[245]\b).*(reasoning|model|low|medium|high|xhigh)/i.test(value)) return true;
 
-  const objectWords = /(\u4f1a\u8bdd|\u7ed8\u753b|\u56de\u8bdd|\u5bf9\u8bdd|\u9879\u76ee|\u6a21\u578b|\u63a8\u7406|\u6df1\u5ea6)/;
-  const actionWords = /(\u54ea\u4e9b|\u5217\u8868|\u5f53\u524d|\u7ed1\u5b9a|\u5207\u6362|\u5207\u5230|\u6362\u5230|\u65b0\u5efa|\u521b\u5efa|\u6539\u6210|\u8bbe\u7f6e|\u8c03\u6574)/;
+  if (/(\u53d6\u6d88|\u505c\u6b62|\u4e2d\u65ad|\u6682\u505c|\u505c\u4e00\u4e0b|\u5148\u505c|\u522b\u8dd1\u4e86)/.test(value)) return true;
+
+  const objectWords = /(\u4f1a\u8bdd|\u7ed8\u753b|\u56de\u8bdd|\u5bf9\u8bdd|\u9879\u76ee|\u6a21\u578b|\u63a8\u7406|\u6df1\u5ea6|\u4efb\u52a1)/;
+  const actionWords = /(\u54ea\u4e9b|\u5217\u8868|\u5f53\u524d|\u7ed1\u5b9a|\u5207\u6362|\u5207\u5230|\u6362\u5230|\u65b0\u5efa|\u521b\u5efa|\u6539\u6210|\u8bbe\u7f6e|\u8c03\u6574|\u67e5\u770b|\u8bfb\u53d6|\u53d6\u6d88|\u505c\u6b62|\u4e2d\u65ad|\u6682\u505c|\u5f52\u6863|\u6062\u590d)/;
   if (objectWords.test(value) && actionWords.test(value)) return true;
   if (/(\u5e2e\u52a9|\u6307\u4ee4|\u547d\u4ee4)/.test(value)) return true;
   if (/(gpt[-\s]?\d|gpt\d|\b5\.[245]\b|\u6a21\u578b).*(\u4f4e|\u4e2d|\u9ad8|\u8d85\u9ad8|\u63a8\u7406|\u6df1\u5ea6)/i.test(value)) return true;
@@ -299,6 +595,35 @@ function sessionTextList(sessions) {
   return sessions.map((thread, index) => `${index + 1}. ${displayThreadName(thread) || "(untitled)"}\n${thread.id}`).join("\n\n");
 }
 
+function summarizeThreadRead(result, threadId) {
+  const thread = result?.thread || result?.data?.thread || result?.data || result || {};
+  const items = result?.items || result?.data?.items || thread.items || thread.messages || [];
+  const title = displayThreadName(thread) || thread.name || thread.title || "(未命名)";
+  const previewItems = Array.isArray(items) ? items.slice(-3).map((item) => {
+    const role = item.role || item.author || item.type || "item";
+    const text = extractThreadItemText(item);
+    return text ? `${role}: ${truncate(text, 180)}` : "";
+  }).filter(Boolean) : [];
+  return [
+    `会话：${title}`,
+    `thread: ${thread.id || threadId}`,
+    previewItems.length ? "\n最近内容：" : "",
+    previewItems.join("\n\n")
+  ].filter(Boolean).join("\n");
+}
+
+function extractThreadItemText(item) {
+  if (!item) return "";
+  if (typeof item === "string") return item;
+  if (typeof item.text === "string") return item.text;
+  if (typeof item.content === "string") return item.content;
+  if (Array.isArray(item.content)) {
+    return item.content.map((part) => part.text || part.content || "").join("").trim();
+  }
+  if (item.message) return extractThreadItemText(item.message);
+  return "";
+}
+
 function modelHelpText(chat) {
   return [
     `\u5f53\u524d\uff1amodel=${chat.model}, reasoning=${chat.reasoning}`,
@@ -311,8 +636,8 @@ function modelHelpText(chat) {
 function helpText(chat) {
   return [
     "\u6211\u53ef\u4ee5\u76f4\u63a5\u7406\u89e3\u4f60\u7684\u81ea\u7136\u8bed\u8a00\u6307\u4ee4\u3002",
-    "\u7ba1\u7406\u80fd\u529b\uff1a\u67e5\u770b\u5f53\u524d\u4f1a\u8bdd\u3001\u5217\u51fa\u4f1a\u8bdd\u3001\u5207\u6362\u4f1a\u8bdd\u3001\u65b0\u5efa\u4f1a\u8bdd\u3001\u5207\u6362\u6a21\u578b/\u63a8\u7406\u6df1\u5ea6\u3002",
-    "\u5feb\u6377\u547d\u4ee4\uff1a/current, /sessions, /switch <name|id|index>, /new [name], /model model=gpt-5.5 reasoning=high",
+    "\u7ba1\u7406\u80fd\u529b\uff1a\u67e5\u770b\u5f53\u524d\u4f1a\u8bdd\u3001\u5217\u51fa\u4f1a\u8bdd\u3001\u5207\u6362\u4f1a\u8bdd\u3001\u65b0\u5efa\u4f1a\u8bdd\u3001\u5207\u6362\u6a21\u578b/\u63a8\u7406\u6df1\u5ea6\u3001\u53d6\u6d88\u4efb\u52a1\u3001\u8bfb\u53d6/\u5f52\u6863\u4f1a\u8bdd\u3002",
+    "\u5feb\u6377\u547d\u4ee4\uff1a/current, /sessions, /switch <name|id|index>, /new [name], /model model=gpt-5.5 reasoning=high, /jobs, /cancel, /read, /archive, /unarchive",
     `\u5f53\u524d\uff1amodel=${chat.model}, reasoning=${chat.reasoning}`
   ].join("\n");
 }

@@ -18,6 +18,8 @@ This is the default because it does not modify how Codex Desktop starts. Feishu-
 
 Installing this skill alone is not enough to connect Feishu and Codex. The skill includes the gateway code template, but the runtime still needs the Feishu CLI, a Feishu self-built app, app permissions, and user authorization/configuration.
 
+This desktop skill is the standalone new-user version. It should be usable without the creator's personal `lark-cli` skill, local workspace names, saved state, logs, or credentials.
+
 From zero, the expected chain is:
 
 ```text
@@ -144,6 +146,7 @@ The template contains:
 
 ```text
 feishu_codex_gateway\src\index.js
+feishu_codex_gateway\src\jobStatus.js
 feishu_codex_gateway\package.json
 feishu_codex_gateway\package-lock.json
 scripts\start_feishu_codex_gateway.ps1
@@ -197,6 +200,8 @@ Project directory: <workspace>\Feishu
 Model: gpt-5.5
 Reasoning: high
 ```
+
+The bundled gateway resolves `lark-cli` from `PATH` by default. If a user installed it somewhere non-standard, set `FEISHU_CODEX_LARK_CLI` or `LARK_CLI_PATH` to the full executable path.
 
 ## Feishu App Requirements
 
@@ -256,10 +261,22 @@ Shortcut commands:
 /sessions  list known gateway sessions
 /switch    switch binding by session name, index, or id
 /model     change model and reasoning, e.g. /model model=gpt-5.5 reasoning=high
+/cancel    cancel/interrupt the current running Codex task
+/jobs      show recent Feishu gateway tasks
+/read      read the current bound Codex session
+/archive   archive the current or specified session
+/unarchive restore the current or specified archived session
 /help      show command help
 ```
 
-Natural language can also route to management actions: current session, list sessions, switch session, new session, model/reasoning changes, and help. Other text delegates to the currently bound Codex thread with full Codex permissions.
+Natural language can also route to management actions: current session, list sessions, switch session, new session, model/reasoning changes, cancel/pause/stop a task, list jobs, read the current session, archive/unarchive sessions, and help. Router prompts include the current action list on every route request so old router threads do not keep stale action capabilities. Other text delegates to the currently bound Codex thread with full Codex permissions.
+
+When a Codex task is already running, a router turn classifies the next Feishu message as either `steer` or `enqueue`:
+
+- `steer`: supplement, correction, constraint, clarification, or answer for the current running task.
+- `enqueue`: separate task, or any uncertain case.
+
+Queued jobs should acknowledge with a short text message and should not show a task card until they actually start.
 
 ## Reply Rendering
 
@@ -274,10 +291,11 @@ Current rendering behavior:
 - Full session `response_item` final answer is preferred over shorter app-server event text.
 - Angle brackets are escaped before sending Markdown so XML-like tags are visible as text.
 - Codex turns intentionally have no hard reply timeout, so long tasks can finish and push final answers back to Feishu.
+- Task status cards are sent through CardKit. Card updates must be serialized per job to avoid Feishu `300317 sequence number compare failed` errors. If a status-card update fails, log it and keep going; do not create a duplicate completion card because the final Codex reply is the completion signal.
 
 Avoid direct multi-line `lark-cli im +messages-send --markdown` or `--text` sends for final answers. In testing, those paths can store only the first line/body title, while interactive cards preserve the full content.
 
-Do not add a "long task progress card" by default. It was tried and removed to keep replies simpler and avoid extra Feishu messages.
+Keep task status cards lightweight. The final answer should be separate from the task card and may be plain text or sectioned interactive markdown cards depending on length and content.
 
 ## Network Requirement
 
@@ -306,6 +324,7 @@ If Feishu does not reply:
 6. If received but slow, look for Codex reconnect logs and verify VPN/TUN.
 7. Confirm the gateway uses `%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe`, not the WindowsApps shim.
 8. Test slash commands such as `/current` or `/sessions` to separate routing latency from Codex execution latency.
+9. If status cards duplicate or fail to update, check for CardKit `300317` sequence errors and confirm per-job card update queuing is present in `src\thinBridge.js`.
 
 ## Proxy Warning
 

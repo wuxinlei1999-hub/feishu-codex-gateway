@@ -5,17 +5,24 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $Gateway = Join-Path $Root "feishu_codex_gateway"
 $GatewayIndex = [System.IO.Path]::GetFullPath((Join-Path $Gateway "src\index.js"))
 $GatewayIndexPattern = [regex]::Escape($GatewayIndex)
+$RelativeGatewayIndexPattern = '(^|\s|")src[\\/]index\.js(\s|"|$)'
 $StatePath = Join-Path $Root ".feishu_codex_gateway\state.json"
 $LogPath = Join-Path $Root ".feishu_codex_gateway\gateway.log"
 $StartupTaskName = "FeishuCodexGateway"
 
+function Test-GatewayProcess($Process) {
+  return $Process.Name -match "^node(\.exe)?$" -and
+    $Process.CommandLine -and
+    $Process.CommandLine -match "--listen" -and
+    (
+      $Process.CommandLine -match $GatewayIndexPattern -or
+      $Process.CommandLine -match $RelativeGatewayIndexPattern
+    )
+}
+
 $AllProcesses = Get-CimInstance Win32_Process
 $GatewayProcesses = @($AllProcesses |
-  Where-Object {
-    $_.Name -match "^node(\.exe)?$" -and
-    $_.CommandLine -match $GatewayIndexPattern -and
-    $_.CommandLine -match "--listen"
-  })
+  Where-Object { Test-GatewayProcess $_ })
 
 function Get-ChildProcesses([int]$ParentId, $ProcessList) {
   $children = @($ProcessList | Where-Object { $_.ParentProcessId -eq $ParentId })

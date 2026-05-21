@@ -1,4 +1,4 @@
-﻿# Feishu Codex Gateway
+# Feishu Codex Gateway
 
 A thin TeleCodex-style bridge for Feishu/Lark and Codex.
 
@@ -89,16 +89,30 @@ The startup task calls `scripts\start_feishu_codex_gateway.ps1`, which is idempo
 /sessions  list known gateway sessions
 /switch    switch the Feishu chat binding by session name, index, or id
 /model     change model and reasoning, for example: /model model=gpt-5.5 reasoning=high
+/cancel    cancel/interrupt the current running Codex task
+/jobs      show recent Feishu gateway tasks
+/read      read the current bound Codex session
+/archive   archive the current or specified session
+/unarchive restore the current or specified archived session
 /help      show help
 ```
 
-Shortcut commands go straight to gateway actions. Other text is first classified as either a gateway management action or a Codex task. Gateway actions include current session, list sessions, switch session, new session, model/reasoning changes, and help. Everything else is delegated to the currently bound Codex thread with full Codex permissions.
+Shortcut commands go straight to gateway actions. Other text is first classified as either a gateway management action or a Codex task. Gateway actions include current session, list sessions, switch session, new session, model/reasoning changes, cancel/pause/stop a task, list jobs, read the current session, archive/unarchive sessions, and help. Everything else is delegated to the currently bound Codex thread with full Codex permissions.
+
+When a Codex task is already running, the gateway classifies the next Feishu message as either:
+
+- `steer`: a supplement, correction, constraint, clarification, or answer for the current task.
+- `enqueue`: a separate task, or any uncertain case.
+
+Queued jobs acknowledge by text and get a task card only when they actually start.
 
 New Codex sessions receive Feishu reply-format instructions through their base instructions. Existing sessions are not auto-patched during normal chat.
 
 Codex turns intentionally have no hard reply timeout, so long-running tasks can finish and still be pushed back to Feishu. Low-level app-server startup and JSON-RPC requests still use short technical guardrails so broken connections fail visibly.
 
 Feishu replies should preserve complete Codex output. The gateway prefers the full session `response_item` final answer over the shorter app-server event text, because XML-like markers such as `oai-mem-citation` can be stripped from event text. Long or multi-section replies are split by Markdown chapters or paragraphs before sending, regardless of whether the original output looked like a card, Markdown, plain text, or another reply shape. Multi-line replies are sent as interactive markdown cards because direct `--markdown` and `--text` CLI sends can drop body content after the first line. If a card fails because a Markdown table exceeds Feishu card limits, the gateway retries that section with the table converted to list rows. Before sending Markdown to Feishu, the gateway escapes angle brackets so tags are visible as plain text instead of being interpreted.
+
+Task status cards are sent through CardKit and updated through a per-job queue to avoid Feishu `300317 sequence number compare failed` errors. If a task-card update fails, the gateway logs it and keeps going; it does not create a duplicate completion card because the final Codex reply is the completion signal.
 
 ## Network Requirement
 

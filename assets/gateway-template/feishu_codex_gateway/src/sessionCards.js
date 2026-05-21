@@ -15,8 +15,8 @@ export function buildProjectSessionCards({ threads, currentChat, savedRoots }) {
   const visibleThreads = threads.filter(shouldShowThread);
   const { projectGroups, normalThreads } = groupThreads(visibleThreads, savedRoots);
   const currentRoot = matchingProjectRoot(currentChat?.cwd, savedRoots);
-  const currentProject = currentRoot ? projectLabel(path.basename(currentRoot)) : "普通会话";
-  const currentThreadName = currentChat?.threadName || "飞书会话";
+  const currentProject = currentRoot ? projectLabel(path.basename(currentRoot)) : "Normal chats";
+  const currentThreadName = currentChat?.threadName || "Feishu Session";
   const orderedProjects = [...projectGroups.keys()].sort((a, b) => {
     if (a === currentProject) return -1;
     if (b === currentProject) return 1;
@@ -46,10 +46,10 @@ export function buildProjectSessionCards({ threads, currentChat, savedRoots }) {
 
 function buildCardKit2({ currentProject, currentThreadName, orderedProjects, projectGroups, normalThreads, currentThreadId }) {
   const elements = [
-    sectionTitle("当前", "check-one_outlined"),
+    sectionTitle("Current", "check-one_outlined"),
     currentBlock(currentProject, currentThreadName),
     divider(),
-    sectionTitle("项目", "folder_outlined")
+    sectionTitle("Projects", "folder_outlined")
   ];
 
   orderedProjects.forEach((project, index) => {
@@ -57,7 +57,7 @@ function buildCardKit2({ currentProject, currentThreadName, orderedProjects, pro
     const names = dedupeNames(list.map(displayThreadName));
     const isCurrent = list.some((thread) => thread.id === currentThreadId);
     elements.push(projectBlock({
-      title: `${index + 1}. ${project}${isCurrent ? " · 当前" : ""}`,
+      title: `${index + 1}. ${project}${isCurrent ? " · Current" : ""}`,
       names,
       isCurrent
     }));
@@ -66,12 +66,12 @@ function buildCardKit2({ currentProject, currentThreadName, orderedProjects, pro
   if (normalThreads.length) {
     const names = dedupeNames(normalThreads.map(displayThreadName));
     elements.push(divider());
-    elements.push(sectionTitle("普通会话", "chat_outlined"));
+    elements.push(sectionTitle("Normal chats", "chat_outlined"));
     elements.push(sessionListBlock(names));
   }
 
   elements.push(divider());
-  elements.push(markdown(`<font color='grey'>项目 ${orderedProjects.length} 个，普通会话 ${normalThreads.length} 个</font>`, {
+  elements.push(markdown(`<font color='grey'>Projects: ${orderedProjects.length}; normal chats: ${normalThreads.length}</font>`, {
     textSize: "notation",
     margin: "0px 0px 0px 0px"
   }));
@@ -81,12 +81,12 @@ function buildCardKit2({ currentProject, currentThreadName, orderedProjects, pro
     config: {
       wide_screen_mode: true,
       update_multi: true,
-      summary: { content: "Codex 项目与普通会话" }
+      summary: { content: "Codex projects and chats" }
     },
     header: {
       template: "blue",
-      title: { tag: "plain_text", content: "Codex 项目与普通会话" },
-      subtitle: { tag: "plain_text", content: "按桌面项目分组展示" }
+      title: { tag: "plain_text", content: "Codex projects and chats" },
+      subtitle: { tag: "plain_text", content: "Grouped by Desktop workspace" }
     },
     body: {
       direction: "vertical",
@@ -98,9 +98,9 @@ function buildCardKit2({ currentProject, currentThreadName, orderedProjects, pro
 
 function buildFallbackCard({ currentProject, currentThreadName, orderedProjects, projectGroups, normalThreads, currentThreadId }) {
   const elements = [
-    { tag: "div", text: { tag: "plain_text", content: `当前\n项目：${currentProject}\n会话：${currentThreadName}` } },
+    { tag: "div", text: { tag: "plain_text", content: `Current\nProject: ${currentProject}\nSession: ${currentThreadName}` } },
     { tag: "hr" },
-    { tag: "div", text: { tag: "plain_text", content: "项目" } }
+    { tag: "div", text: { tag: "plain_text", content: "Projects" } }
   ];
 
   orderedProjects.forEach((project, index) => {
@@ -111,7 +111,7 @@ function buildFallbackCard({ currentProject, currentThreadName, orderedProjects,
       tag: "div",
       text: {
         tag: "plain_text",
-        content: `${index + 1}. ${project}${isCurrent ? " 当前" : ""}\n${names.map((name, i) => `${i + 1}. ${name}`).join("\n")}`
+        content: `${index + 1}. ${project}${isCurrent ? " Current" : ""}\n${names.map((name, i) => `${i + 1}. ${name}`).join("\n")}`
       }
     });
   });
@@ -121,13 +121,13 @@ function buildFallbackCard({ currentProject, currentThreadName, orderedProjects,
     elements.push({ tag: "hr" });
     elements.push({
       tag: "div",
-      text: { tag: "plain_text", content: `普通会话\n${names.map((name, i) => `${i + 1}. ${name}`).join("\n")}` }
+      text: { tag: "plain_text", content: `Normal chats\n${names.map((name, i) => `${i + 1}. ${name}`).join("\n")}` }
     });
   }
 
   return {
     config: { wide_screen_mode: true },
-    header: { template: "blue", title: { tag: "plain_text", content: "Codex 项目与普通会话" } },
+    header: { template: "blue", title: { tag: "plain_text", content: "Codex projects and chats" } },
     elements
   };
 }
@@ -162,7 +162,7 @@ function currentBlock(project, threadName) {
       weight: 1,
       elements: [
         markdown(`**${escapeMarkdown(project)}**`, { textSize: "heading" }),
-        markdown(`**当前会话：${escapeMarkdown(threadName)}**`, { textSize: "heading" })
+        markdown(`**Current session: ${escapeMarkdown(threadName)}**`, { textSize: "heading" })
       ]
     }]
   };
@@ -180,7 +180,7 @@ function projectBlock({ title, names, isCurrent }) {
       weight: 1,
       elements: [
         markdown(`**${escapeMarkdown(title)}**`, { textSize: "heading", margin: "0px 0px 4px 0px" }),
-        markdown(names.map((name) => `· ${escapeMarkdown(name)}`).join("\n"), {
+        markdown(names.map((name) => `- ${escapeMarkdown(name)}`).join("\n"), {
           textSize: "normal",
           margin: "0px 0px 0px 0px"
         })
@@ -200,7 +200,7 @@ function sessionListBlock(names) {
       width: "weighted",
       weight: 1,
       elements: [
-        markdown(names.map((name) => `· ${escapeMarkdown(name)}`).join("\n"), {
+        markdown(names.map((name) => `- ${escapeMarkdown(name)}`).join("\n"), {
           textSize: "normal",
           margin: "0px 0px 0px 0px"
         })
@@ -264,7 +264,7 @@ function matchingProjectRoot(cwd, roots) {
 }
 
 function projectLabel(base) {
-  return base || "未命名项目";
+  return base || "Unnamed project";
 }
 
 function normalizePath(value) {
@@ -276,7 +276,7 @@ function dedupeNames(names) {
   return names.map((name) => {
     const count = (seen.get(name) || 0) + 1;
     seen.set(name, count);
-    return count === 1 ? name : `${name}（${count}）`;
+    return count === 1 ? name : `${name} (${count})`;
   });
 }
 

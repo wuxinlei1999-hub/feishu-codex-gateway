@@ -2,8 +2,10 @@
 import {
   consumeFeishuEvents,
   sendFeishuCardKitCard,
+  sendFeishuCardKitCardDetailed,
   sendFeishuReply,
-  sendFeishuText
+  sendFeishuText,
+  updateFeishuCardKitCard
 } from "./feishu.js";
 import { loadDotEnv, logLine, LOG_PATH } from "./config.js";
 import { syncFeishuDesktopProjectsFromState } from "./desktopState.js";
@@ -16,8 +18,11 @@ const args = process.argv.slice(2);
 const bridge = new ThinBridge({
   sendText: sendFeishuText,
   sendCard: sendFeishuCardKitCard,
-  sendReply: sendFeishuReply
+  sendReply: sendFeishuReply,
+  sendJobCard: sendFeishuCardKitCardDetailed,
+  updateJobCard: updateFeishuCardKitCard
 });
+await bridge.recoverInterruptedJobs();
 
 if (args.includes("--listen")) {
   logLine("thin bridge listen start");
@@ -37,3 +42,4 @@ if (args.includes("--listen")) {
     : args.join(" ") || "你是谁？";
   await bridge.handleMessage({ chatId: "local-test", text: message });
 }
+

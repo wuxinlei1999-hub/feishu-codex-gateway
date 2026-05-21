@@ -10,9 +10,20 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $Gateway = Join-Path $Root "feishu_codex_gateway"
 $GatewayIndex = [System.IO.Path]::GetFullPath((Join-Path $Gateway "src\index.js"))
 $GatewayIndexPattern = [regex]::Escape($GatewayIndex)
+$RelativeGatewayIndexPattern = '(^|\s|")src[\\/]index\.js(\s|"|$)'
 $LogDir = Join-Path $Root ".feishu_codex_gateway"
 $LogPath = Join-Path $LogDir "gateway.log"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+function Test-GatewayProcess($Process) {
+  return $Process.Name -match "^node(\.exe)?$" -and
+    $Process.CommandLine -and
+    $Process.CommandLine -match "--listen" -and
+    (
+      $Process.CommandLine -match $GatewayIndexPattern -or
+      $Process.CommandLine -match $RelativeGatewayIndexPattern
+    )
+}
 
 function Get-ChildProcesses([int]$ParentId, $ProcessList) {
   $children = @($ProcessList | Where-Object { $_.ParentProcessId -eq $ParentId })
@@ -25,11 +36,7 @@ function Get-ChildProcesses([int]$ParentId, $ProcessList) {
 $AllProcesses = Get-CimInstance Win32_Process
 
 $Existing = $AllProcesses |
-  Where-Object {
-    $_.Name -match "^node(\.exe)?$" -and
-    $_.CommandLine -match $GatewayIndexPattern -and
-    $_.CommandLine -match "--listen"
-  }
+  Where-Object { Test-GatewayProcess $_ }
 
 if ($Existing) {
   if (-not $UseProxy) {

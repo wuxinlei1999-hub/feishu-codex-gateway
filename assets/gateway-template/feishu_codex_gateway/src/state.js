@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { ensureDataDir, STATE_PATH, logLine } from "./config.js";
 
 function defaultState() {
-  return { version: 1, bridgeChats: {}, routerThreadId: "" };
+  return { version: 1, bridgeChats: {}, routerThreadId: "", jobs: {} };
 }
 
 export function loadState() {
@@ -17,7 +17,8 @@ export function loadState() {
     return {
       version: state.version || 1,
       bridgeChats: state.bridgeChats || {},
-      routerThreadId: state.routerThreadId || ""
+      routerThreadId: state.routerThreadId || "",
+      jobs: state.jobs || {}
     };
   } catch (error) {
     logLine(`state read failed: ${error.message}`);
@@ -30,6 +31,7 @@ export function saveState(state) {
   fs.writeFileSync(STATE_PATH, JSON.stringify({
     version: state.version || 1,
     bridgeChats: state.bridgeChats || {},
-    routerThreadId: state.routerThreadId || ""
+    routerThreadId: state.routerThreadId || "",
+    jobs: state.jobs || {}
   }, null, 2), "utf8");
 }

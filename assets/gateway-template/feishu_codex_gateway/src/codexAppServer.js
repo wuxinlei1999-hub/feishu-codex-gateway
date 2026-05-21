@@ -1,4 +1,4 @@
-﻿import { spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -233,6 +233,11 @@ export class CodexAppServerClient {
 
     const turn = this.turns.get(turnId);
     if (!turn) return;
+    if (turn.onEvent) {
+      Promise.resolve(turn.onEvent(message)).catch((error) => {
+        logLine(`codex turn event handler failed turn_id=${turnId}: ${error.message}`);
+      });
+    }
 
     if (method === "item/agentMessage/delta") {
       turn.delta.push(params.delta || "");
@@ -267,11 +272,19 @@ export class CodexAppServerClient {
       return;
     }
     const eventText = turn.final.join("\n").trim() || turn.delta.join("").trim();
-    const sessionText = readLatestSessionFinalAnswer(turn.threadId, turn.startedAt);
-    if (sessionText && sessionText !== eventText) {
+    const sessionText = eventText ? "" : readLatestSessionFinalAnswer(turn.threadId, turn.startedAt);
+    if (!eventText && sessionText) {
       logLine(`codex final answer recovered from session thread_id=${turn.threadId} event_len=${eventText.length} session_len=${sessionText.length}`);
     }
     const text = sessionText || eventText;
+    if (turn.onEvent) {
+      Promise.resolve(turn.onEvent({
+        method: "turn/finalText",
+        params: { turnId, threadId: turn.threadId, text }
+      })).catch((handlerError) => {
+        logLine(`codex final text handler failed turn_id=${turnId}: ${handlerError.message}`);
+      });
+    }
     turn.resolve(text || "Codex \u5df2\u5b8c\u6210\uff0c\u4f46\u6ca1\u6709\u8fd4\u56de\u6587\u672c\u3002");
   }
 
@@ -302,7 +315,7 @@ export class CodexAppServerClient {
     await this.request("thread/name/set", { threadId, name }, 10000);
   }
 
-  async runTurn({ threadId, text, cwd = WORKSPACE_ROOT, model = DEFAULT_MODEL, reasoning = DEFAULT_REASONING }) {
+  async startTurnStream({ threadId, text, cwd = WORKSPACE_ROOT, model = DEFAULT_MODEL, reasoning = DEFAULT_REASONING, onEvent }) {
     await this.resumeThread(threadId).catch((error) => {
       logLine(`thread resume before turn failed: ${error.message}`);
     });
@@ -320,9 +333,42 @@ export class CodexAppServerClient {
     if (!turnId) {
       throw new Error(`turn/start did not return turn id: ${JSON.stringify(result)}`);
     }
-    return new Promise((resolve, reject) => {
-      this.turns.set(turnId, { resolve, reject, delta: [], final: [], threadId, startedAt });
+    const completion = new Promise((resolve, reject) => {
+      this.turns.set(turnId, { resolve, reject, delta: [], final: [], threadId, startedAt, onEvent });
     });
+    if (onEvent) {
+      await Promise.resolve(onEvent({ method: "turn/started", params: { turnId, threadId } }));
+    }
+    return { turnId, completion };
+  }
+
+  async runTurn(args) {
+    const { completion } = await this.startTurnStream(args);
+    return completion;
+  }
+
+  async steerTurn({ threadId, turnId, text }) {
+    return this.request("turn/steer", {
+      threadId,
+      expectedTurnId: turnId,
+      input: [{ type: "text", text }]
+    }, 10000);
+  }
+
+  async interruptTurn(turnId, threadId = "") {
+    return this.request("turn/interrupt", threadId ? { threadId, turnId } : { turnId }, 10000);
+  }
+
+  async archiveThread(threadId) {
+    return this.request("thread/archive", { threadId }, 10000);
+  }
+
+  async unarchiveThread(threadId) {
+    return this.request("thread/unarchive", { threadId }, 10000);
+  }
+
+  async readThread(threadId) {
+    return this.request("thread/read", { threadId }, 30000);
   }
 }
 
