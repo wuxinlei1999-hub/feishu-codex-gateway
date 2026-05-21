@@ -199,9 +199,18 @@ Default Codex thread: Feishu Session
 Project directory: <workspace>\Feishu
 Model: gpt-5.5
 Reasoning: high
+Assistant name: Feishu bot app name
 ```
 
 The bundled gateway resolves `lark-cli` from `PATH` by default. If a user installed it somewhere non-standard, set `FEISHU_CODEX_LARK_CLI` or `LARK_CLI_PATH` to the full executable path.
+
+For new Codex sessions, the gateway asks Feishu for the configured bot name:
+
+```powershell
+lark-cli.cmd api GET /open-apis/bot/v3/info --as bot
+```
+
+It uses `bot.app_name` in the session instructions so the assistant self-name matches the bot users see in Feishu. Set `FEISHU_CODEX_ASSISTANT_NAME` to override this manually.
 
 ## Feishu App Requirements
 

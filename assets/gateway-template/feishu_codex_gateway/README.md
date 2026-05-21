@@ -26,9 +26,10 @@ The bridge does not try to be a second brain. It connects Feishu to a long-lived
 ```text
 Default Codex thread: Feishu Session
 Project directory: <workspace>\Feishu
+Assistant name: Feishu bot app name
 ```
 
-The gateway creates the project directory automatically.
+The gateway creates the project directory automatically. New Codex sessions mirror the configured Feishu bot name from `lark-cli api GET /open-apis/bot/v3/info --as bot`; set `FEISHU_CODEX_ASSISTANT_NAME` to override it.
 
 Default model: `gpt-5.5`, high reasoning.
 

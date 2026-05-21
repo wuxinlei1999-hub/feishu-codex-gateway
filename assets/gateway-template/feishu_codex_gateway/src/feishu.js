@@ -9,6 +9,36 @@ function larkCommand() {
   return process.platform === "win32" ? "lark-cli.cmd" : "lark-cli";
 }
 
+let cachedBotName = "";
+
+export function getFeishuBotName() {
+  const configured = String(process.env.FEISHU_CODEX_ASSISTANT_NAME || "").trim();
+  if (configured) return configured;
+  if (cachedBotName) return cachedBotName;
+
+  const command = larkCommand();
+  const result = spawnSync(
+    command,
+    ["api", "GET", "/open-apis/bot/v3/info", "--as", "bot"],
+    { encoding: "utf8", errors: "replace", shell: usesCmdShim(command), timeout: 6000 }
+  );
+  if (result.status !== 0) {
+    logLine(`get feishu bot name failed code=${result.status}: ${truncate(result.stderr || result.stdout, 800)}`);
+    return "Feishu Codex Assistant";
+  }
+  try {
+    const parsed = JSON.parse(result.stdout || "{}");
+    const name = String(parsed?.bot?.app_name || parsed?.data?.bot?.app_name || parsed?.data?.app_name || "").trim();
+    if (name) {
+      cachedBotName = name;
+      return cachedBotName;
+    }
+  } catch (error) {
+    logLine(`parse feishu bot name failed: ${error.message}`);
+  }
+  return "Feishu Codex Assistant";
+}
+
 function usesCmdShim(command) {
   return process.platform === "win32" && command.toLowerCase().endsWith(".cmd");
 }

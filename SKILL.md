@@ -1,6 +1,6 @@
 ﻿---
 name: feishu-codex-gateway
-description: Operate, troubleshoot, and package the local Feishu/Lark to Codex gateway that lets a Feishu bot chat with a long-lived Codex app-server thread. Use when the user mentions Feishu/Lark connecting to Codex, the Feishu-Codex gateway, Xiaoshu bot chat, gateway startup/autostart, Feishu message routing, session/model switching from Feishu, gateway logs, lark-cli event consume, or repeated Codex stream reconnects such as Reconnecting 1/5 through 5/5.
+description: Operate, troubleshoot, and package the local Feishu/Lark to Codex gateway that lets a Feishu bot chat with a long-lived Codex app-server thread. Use when the user mentions Feishu/Lark connecting to Codex, the Feishu-Codex gateway, Feishu bot chat, gateway startup/autostart, Feishu message routing, session/model switching from Feishu, gateway logs, lark-cli event consume, or repeated Codex stream reconnects such as Reconnecting 1/5 through 5/5.
 ---
 
 # Feishu Codex Gateway
@@ -54,6 +54,7 @@ powershell -ExecutionPolicy Bypass -File <skill>\scripts\install-startup.ps1
 
 - Installing this skill alone does not install `lark-cli`, create a Feishu app, or grant Feishu permissions. The skill does include a bundled gateway template under `assets/gateway-template`; install it with `scripts/install-gateway.ps1`.
 - Keep this standalone package generic for new users: default names are `Feishu` and `Feishu Session`, and the gateway finds `lark-cli` through `PATH`, `FEISHU_CODEX_LARK_CLI`, or `LARK_CLI_PATH`.
+- Do not hard-code a personal assistant/persona name. New Codex sessions should mirror the configured Feishu bot name from `lark-cli api GET /open-apis/bot/v3/info --as bot`; users can override it with `FEISHU_CODEX_ASSISTANT_NAME`.
 - Do not modify Codex Desktop startup variables, `CODEX_CLI_PATH`, or proxy settings by default.
 - Keep the stable independent app-server gateway as the default path.
 - Do not use proxy mode unless the user explicitly asks to debug shared Desktop/app-server internals.
@@ -84,6 +85,7 @@ Thread name: Feishu Session
 Project directory: <workspace>\Feishu
 Model: gpt-5.5
 Reasoning: high
+Assistant name: Feishu bot app name, or `FEISHU_CODEX_ASSISTANT_NAME` when set
 ```
 
 ## Resources
