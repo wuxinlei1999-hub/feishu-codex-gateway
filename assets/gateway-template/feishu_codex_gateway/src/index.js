@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {
   consumeFeishuEvents,
+  downloadFeishuMessageResource,
   sendFeishuCardKitCard,
   sendFeishuCardKitCardDetailed,
   sendFeishuReply,
@@ -28,9 +29,12 @@ if (args.includes("--listen")) {
   logLine("thin bridge listen start");
   console.log(`Feishu-Codex thin bridge listening. Log: ${LOG_PATH}`);
   consumeFeishuEvents(async (event) => {
-    if (!event.text) return;
+    const attachments = (event.resources || [])
+      .map((resource) => downloadFeishuMessageResource(resource))
+      .filter(Boolean);
+    if (!event.text && attachments.length === 0) return;
     try {
-      await bridge.handleMessage({ chatId: event.chatId, text: event.text });
+      await bridge.handleMessage({ chatId: event.chatId, text: event.text, attachments });
     } catch (error) {
       logLine(`handle event failed: ${error.stack || error.message}`);
       sendFeishuText(event.chatId, `处理失败：${error.message}`);

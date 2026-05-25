@@ -5,7 +5,7 @@ export const ACTIVE_JOB_STATUSES = new Set(["starting", "running", "canceling"])
 export const OPEN_JOB_STATUSES = new Set(["queued", ...ACTIVE_JOB_STATUSES]);
 export const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "canceled", "interrupted"]);
 
-export function createJob(state, { chatId, threadId, text, cwd, model, reasoning }) {
+export function createJob(state, { chatId, threadId, text, cwd, model, reasoning, attachments = [] }) {
   state.jobs ||= {};
   const id = `job_${Date.now().toString(36)}_${crypto.randomBytes(3).toString("hex")}`;
   const now = new Date().toISOString();
@@ -17,6 +17,7 @@ export function createJob(state, { chatId, threadId, text, cwd, model, reasoning
     status: "queued",
     title: firstLine(text, 80) || "Codex 任务",
     text: String(text || ""),
+    attachments,
     cwd: cwd || "",
     model: model || "",
     reasoning: reasoning || "",

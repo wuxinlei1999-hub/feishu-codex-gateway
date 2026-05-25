@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import iconv from "iconv-lite";
 import { logLine, truncate } from "./config.js";
 
@@ -291,12 +292,16 @@ function parseEventLine(line) {
     const message = event.message || event;
     const sender = event.sender || {};
     const content = parseContent(message.content || event.content || "");
+    const messageType = message.message_type || event.message_type || "";
+    const resources = extractMessageResources({ content, message, event, raw, messageType });
+    const text = eventText({ content, resources, messageType });
     return {
       chatId: message.chat_id || event.chat_id,
       messageId: message.message_id || event.message_id || raw.message_id,
       senderId: sender.sender_id?.open_id || sender.sender_id?.user_id || event.sender_id,
-      messageType: message.message_type || event.message_type,
-      text: repairMojibake(content.text || String(content || "").trim()),
+      messageType,
+      text: repairMojibake(text),
+      resources,
       raw
     };
   } catch {
@@ -311,6 +316,88 @@ function parseContent(content) {
   } catch {
     return { text: content };
   }
+}
+
+function eventText({ content, resources, messageType }) {
+  const text = String(content?.text || "").trim();
+  if (text) return text;
+  if (resources.length) {
+    const imageCount = resources.filter((resource) => resource.type === "image").length;
+    const fileCount = resources.length - imageCount;
+    return [
+      imageCount ? `User sent ${imageCount} image(s) from Feishu.` : "",
+      fileCount ? `User sent ${fileCount} file(s) from Feishu.` : "",
+      "Use the attachment content when handling this request."
+    ].filter(Boolean).join(" ");
+  }
+  if (messageType && messageType !== "text") return `User sent a Feishu ${messageType} message, but no downloadable resource was parsed.`;
+  return String(content || "").trim();
+}
+
+function extractMessageResources({ content, message, event, raw, messageType }) {
+  const messageId = message.message_id || event.message_id || raw.message_id || "";
+  const candidates = [];
+  const add = (type, fileKey) => {
+    const key = String(fileKey || "").trim();
+    if (!messageId || !key) return;
+    candidates.push({ type, fileKey: key, messageId });
+  };
+
+  if (content && typeof content === "object") {
+    add("image", content.image_key || content.imageKey);
+    add("file", content.file_key || content.fileKey);
+  }
+
+  const rawText = JSON.stringify([content, message, event]);
+  for (const match of rawText.matchAll(/\bimg_[A-Za-z0-9_-]+\b/g)) add("image", match[0]);
+  for (const match of rawText.matchAll(/\bfile_[A-Za-z0-9_-]+\b/g)) add("file", match[0]);
+  if (messageType === "image" && content?.key) add("image", content.key);
+
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    const id = `${candidate.type}:${candidate.messageId}:${candidate.fileKey}`;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+export function downloadFeishuMessageResource(resource) {
+  const type = resource?.type === "file" ? "file" : "image";
+  const messageId = String(resource?.messageId || "").trim();
+  const fileKey = String(resource?.fileKey || "").trim();
+  if (!messageId || !fileKey) return null;
+
+  const dir = path.join(".feishu_codex_gateway", "inbound");
+  fs.mkdirSync(dir, { recursive: true });
+  const safeName = `${Date.now()}-${fileKey.replace(/[^A-Za-z0-9_.-]/g, "_")}${type === "image" ? ".png" : ""}`;
+  const output = path.join(dir, safeName);
+  const command = larkCommand();
+  const result = spawnSync(
+    command,
+    [
+      "im",
+      "+messages-resources-download",
+      "--as",
+      "bot",
+      "--message-id",
+      messageId,
+      "--file-key",
+      fileKey,
+      "--type",
+      type,
+      "--output",
+      output
+    ],
+    { encoding: "utf8", errors: "replace", shell: usesCmdShim(command) }
+  );
+  if (result.status !== 0) {
+    logLine(`download feishu resource failed code=${result.status} message_id=${messageId} file_key=${fileKey}: ${truncate(result.stderr || result.stdout, 1200)}`);
+    return null;
+  }
+  const absolutePath = path.resolve(output);
+  logLine(`download feishu resource ok message_id=${messageId} file_key=${fileKey} path=${absolutePath}`);
+  return { ...resource, type, path: absolutePath };
 }
 
 function repairMojibake(text) {

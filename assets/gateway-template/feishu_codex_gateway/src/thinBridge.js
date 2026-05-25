@@ -80,14 +80,14 @@ export class ThinBridge {
     return this.queue;
   }
 
-  async handleMessageNow({ chatId = "local-test", text }) {
+  async handleMessageNow({ chatId = "local-test", text, attachments = [] }) {
     const startedAt = Date.now();
     const state = loadState();
     const bindingKey = getBindingKey(chatId);
     const chat = getBridgeChat(state, bindingKey, chatId);
     normalizeChat(chat);
     saveState(state);
-    logLine(`bridge message chat_id=${chatId} binding=${bindingKey} thread_id=${chat.threadId || "(none)"} text=${truncate(text, 300)}`);
+    logLine(`bridge message chat_id=${chatId} binding=${bindingKey} thread_id=${chat.threadId || "(none)"} attachments=${attachments.length} text=${truncate(text, 300)}`);
 
     const shortcut = parseShortcutCommand(text);
     if (shortcut) {
@@ -99,7 +99,7 @@ export class ThinBridge {
 
     if (!shouldUseIntentRouter(text)) {
       logLine(`bridge intent chat_id=${chatId} action=delegate route=fast elapsed_ms=${Date.now() - startedAt}`);
-      await this.delegateToCodex({ chatId, chat, state, text });
+      await this.delegateToCodex({ chatId, chat, state, text, attachments });
       return;
     }
 
@@ -113,7 +113,7 @@ export class ThinBridge {
       return;
     }
 
-    await this.delegateToCodex({ chatId, chat, state, text });
+    await this.delegateToCodex({ chatId, chat, state, text, attachments });
   }
 
   async handleManagementIntent({ chatId, chat, state, intent, sessions }) {
@@ -222,7 +222,7 @@ export class ThinBridge {
     }
   }
 
-  async delegateToCodex({ chatId, chat, state, text }) {
+  async delegateToCodex({ chatId, chat, state, text, attachments = [] }) {
     if (!chat.threadId) {
       chat.threadId = await codexAppServer.startThread({
         cwd: chat.cwd,
@@ -258,7 +258,7 @@ export class ThinBridge {
       activeJob = latestState.jobs?.[activeJob.id] || findActiveJobForThread(latestState, latestChat.threadId);
       if (activeJob && disposition === "steer" && activeJob.turnId) {
         try {
-          await codexAppServer.steerTurn({ threadId: activeJob.threadId, turnId: activeJob.turnId, text });
+          await codexAppServer.steerTurn({ threadId: activeJob.threadId, turnId: activeJob.turnId, text, attachments });
           const latestState = loadState();
           markJobSteered(latestState, activeJob.id, text);
           saveState(latestState);
@@ -288,6 +288,7 @@ export class ThinBridge {
       chatId,
       threadId: latestChat.threadId,
       text,
+      attachments,
       cwd: latestChat.cwd,
       model: latestChat.model,
       reasoning: latestChat.reasoning
@@ -320,6 +321,7 @@ export class ThinBridge {
       const started = await codexAppServer.startTurnStream({
         threadId: job.threadId,
         text: job.text,
+        attachments: job.attachments || [],
         cwd: job.cwd,
         model: job.model,
         reasoning: job.reasoning,

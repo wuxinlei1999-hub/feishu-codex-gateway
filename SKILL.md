@@ -61,6 +61,7 @@ powershell -ExecutionPolicy Bypass -File <skill>\scripts\install-startup.ps1
 - Do not print Feishu app secrets, tokens, cookies, device codes, or verification URLs.
 - If replies are slow and logs show `Reconnecting... 1/5` through `5/5`, check VPN and TUN mode before changing gateway code.
 - For long or multi-line final replies, keep the gateway's sectioned interactive-card sender; direct multi-line `--markdown` or `--text` CLI sends can lose body content.
+- Do not treat Feishu image/file messages as plain text placeholders. Parse `img_xxx`/`image_key` and `file_xxx`/`file_key`, download resources with `lark-cli im +messages-resources-download`, store them under `.feishu_codex_gateway\inbound\`, and pass downloaded images to Codex as local image inputs.
 - If Codex reports `no active turn` during steer/cancel, mark the stale active job `interrupted`, unblock the queue, and keep completion/failure state writes serialized with Feishu message handling.
 - The startup task is a current-user Windows scheduled task named `FeishuCodexGateway`.
 

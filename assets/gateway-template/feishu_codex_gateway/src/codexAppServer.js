@@ -319,14 +319,14 @@ export class CodexAppServerClient {
     await this.request("thread/name/set", { threadId, name }, 10000);
   }
 
-  async startTurnStream({ threadId, text, cwd = WORKSPACE_ROOT, model = DEFAULT_MODEL, reasoning = DEFAULT_REASONING, onEvent }) {
+  async startTurnStream({ threadId, text, attachments = [], cwd = WORKSPACE_ROOT, model = DEFAULT_MODEL, reasoning = DEFAULT_REASONING, onEvent }) {
     await this.resumeThread(threadId).catch((error) => {
       logLine(`thread resume before turn failed: ${error.message}`);
     });
     const startedAt = new Date(Date.now() - 1000).toISOString();
     const result = await this.request("turn/start", {
       threadId,
-      input: [{ type: "text", text, text_elements: [] }],
+      input: buildTurnInput(text, attachments),
       cwd,
       model,
       reasoningEffort: reasoning,
@@ -351,11 +351,11 @@ export class CodexAppServerClient {
     return completion;
   }
 
-  async steerTurn({ threadId, turnId, text }) {
+  async steerTurn({ threadId, turnId, text, attachments = [] }) {
     return this.request("turn/steer", {
       threadId,
       expectedTurnId: turnId,
-      input: [{ type: "text", text }]
+      input: buildTurnInput(text, attachments)
     }, 10000);
   }
 
@@ -377,6 +377,26 @@ export class CodexAppServerClient {
 }
 
 export const codexAppServer = new CodexAppServerClient();
+
+function buildTurnInput(text, attachments = []) {
+  const input = [];
+  const safeText = String(text || "").trim();
+  if (safeText) input.push({ type: "text", text: safeText, text_elements: [] });
+  for (const attachment of attachments || []) {
+    if (!attachment?.path) continue;
+    if (attachment.type === "image") {
+      input.push({ type: "local_image", path: attachment.path });
+    } else {
+      input.push({
+        type: "text",
+        text: `Feishu attachment downloaded locally: ${attachment.path}`,
+        text_elements: []
+      });
+    }
+  }
+  if (input.length === 0) input.push({ type: "text", text: "", text_elements: [] });
+  return input;
+}
 
 function resolveCodexExecutable() {
   const explicit = process.env.FEISHU_CODEX_CLI_PATH?.trim();

@@ -220,9 +220,36 @@ The Feishu/Lark app usually needs:
 - Long-connection event subscription.
 - `im.message.receive_v1` event.
 - Message receive/send scopes.
+- Message resource read/download scope for images and files when users send visual references.
 - App republished or reinstalled after scope changes.
 
 Use the official CLI on Windows as `lark-cli.cmd` if the `.ps1` shim is blocked.
+
+## Inbound Image And File Attachments
+
+Feishu image/file messages are not reliable as plain text. The event may show a placeholder such as `[Image: img_xxx]`, but Codex cannot inspect that placeholder. The gateway should parse and download the actual message resource.
+
+Required behavior:
+
+- Parse `message.content`, `message.message_type`, and the raw event for `img_xxx`, `image_key`, `file_xxx`, or `file_key`.
+- Download each resource with:
+
+```powershell
+lark-cli.cmd im +messages-resources-download --as bot --message-id <om_xxx> --file-key <img_or_file_key> --type image --output .feishu_codex_gateway\inbound\<safe-name>.png
+```
+
+- Store downloads under `.feishu_codex_gateway\inbound\`; that folder is runtime state and must not be committed.
+- Pass downloaded images to Codex as local image inputs, alongside the text prompt.
+- Preserve a short text fallback such as `User sent 1 image(s) from Feishu. Use the attachment content when handling this request.` so task cards and queue titles remain readable.
+
+Validation signals in `.feishu_codex_gateway\gateway.log`:
+
+```text
+bridge message ... attachments=1 ...
+download feishu resource ok message_id=... file_key=... path=...
+```
+
+If a Feishu image still appears only as `[Image: img_xxx]`, check whether the event payload includes a downloadable key and whether `lark-cli im +messages-resources-download` works for that `message_id` and `file_key`.
 
 ## Run Commands
 
