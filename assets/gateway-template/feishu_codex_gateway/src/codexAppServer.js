@@ -385,7 +385,7 @@ function buildTurnInput(text, attachments = []) {
   for (const attachment of attachments || []) {
     if (!attachment?.path) continue;
     if (attachment.type === "image") {
-      input.push({ type: "local_image", path: attachment.path });
+      input.push({ type: "localImage", path: attachment.path });
     } else {
       input.push({
         type: "text",
